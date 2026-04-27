@@ -1,0 +1,20 @@
+{
+  "transactions": [
+    {
+      "timestamp": "2026-04-27T19:42:32",
+      "symbol": "0050",
+      "side": "buy",
+      "price": 42.0,
+      "shares": 100.0,
+      "amount": 4200.0,
+      "fee": 0.0,
+      "tax": 0.0,
+      "total": 4200.0
+    }
+  ],
+  "saving_settings": {
+    "current_savings": 0.0,
+    "savings_goal": 100000.0,
+    "monthly_saving": 10000.0
+  }
+}
