@@ -502,6 +502,15 @@ def render_theme() -> None:
     .stCaption, [data-testid="stCaptionContainer"] p {
         color: var(--text-primary) !important;
     }
+    .stMarkdown .anchor-link, .stMarkdown .header-anchor, a[href^="#"] {
+        display: none !important;
+    }
+    .chart-title {
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin: 0.15rem 0 0.45rem 0;
+    }
 </style>
         """,
         unsafe_allow_html=True,
@@ -673,7 +682,7 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
     chart_col1, chart_col2, chart_col3 = st.columns(3, gap="medium")
 
     with chart_col1:
-        st.markdown("#### 總價值")
+        st.markdown('<div class="chart-title">總價值</div>', unsafe_allow_html=True)
         if not history.empty:
             line_df = history.reset_index().rename(columns={"date": "日期"})
             line_df["日期"] = pd.to_datetime(line_df["日期"]).dt.floor("D")
@@ -682,6 +691,10 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
                 .last()
                 .sort_values("日期")
             )
+            if not line_df.empty:
+                max_date = line_df["日期"].max()
+                min_date = max_date - pd.Timedelta(days=730)
+                line_df = line_df[line_df["日期"] >= min_date]
             fig_line = px.line(
                 line_df,
                 x="日期",
@@ -709,9 +722,9 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
                 ),
                 font=dict(color="#d8e0ea"),
             )
-            st.plotly_chart(fig_line, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_line, use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
         else:
-            st.plotly_chart(_empty_chart("尚無足夠交易資料"), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(_empty_chart("尚無足夠交易資料"), use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
 
     alloc_df = pd.DataFrame(
         {
@@ -723,7 +736,7 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
     total_mv = summary["total_market_value"]
 
     with chart_col2:
-        st.markdown("#### 股票")
+        st.markdown('<div class="chart-title">股票</div>', unsafe_allow_html=True)
         if not alloc_df.empty:
             fig_hold = px.pie(
                 alloc_df,
@@ -751,9 +764,9 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
                     )
                 ],
             )
-            st.plotly_chart(fig_hold, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_hold, use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
         else:
-            st.plotly_chart(_empty_chart("目前無持倉配置"), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(_empty_chart("目前無持倉配置"), use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
 
     category_df = pd.DataFrame(
         {
@@ -764,7 +777,7 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
     category_df = category_df[category_df["市值"] > 0]
 
     with chart_col3:
-        st.markdown("#### 類別")
+        st.markdown('<div class="chart-title">類別</div>', unsafe_allow_html=True)
         if not category_df.empty:
             fig_cat = px.pie(
                 category_df,
@@ -792,9 +805,9 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
                     )
                 ],
             )
-            st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
         else:
-            st.plotly_chart(_empty_chart("目前無類別資料"), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(_empty_chart("目前無類別資料"), use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
 
     # 投資組合明細已整合至上方 0050/0056 卡片，避免重複資訊。
 
