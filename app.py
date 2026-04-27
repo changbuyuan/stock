@@ -511,21 +511,18 @@ def render_theme() -> None:
         color: var(--text-primary);
         margin: 0.15rem 0 0.45rem 0;
     }
+    .st-key-tx_table_mobile {
+        display: none;
+    }
     @media (max-width: 768px) {
         div[data-testid="stHorizontalBlock"] {
             gap: 0.55rem !important;
         }
-        .st-key-tx_table_grid div[data-testid="stHorizontalBlock"] {
-            flex-wrap: nowrap !important;
-            overflow-x: auto !important;
-            overflow-y: hidden !important;
-            padding-bottom: 0.15rem;
-            -webkit-overflow-scrolling: touch;
+        .st-key-tx_table_desktop {
+            display: none;
         }
-        .st-key-tx_table_grid div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-            min-width: max-content !important;
-            width: auto !important;
-            flex: 0 0 auto !important;
+        .st-key-tx_table_mobile {
+            display: block;
         }
         .section-card {
             margin-top: 0.45rem;
@@ -1116,14 +1113,15 @@ def render_transaction_management(transactions: List[Dict]) -> None:
         }
     )
 
-    # 只能在 widget 建立前調整對應 key，避免 Streamlit session_state 例外。
+    selected_idx: List[int] = []
+
+    # 桌機版：保留原本列內勾選表格風格。
     if st.session_state.get("tx_reset_selection", False):
         for idx in display_df["idx"].tolist():
             st.session_state[f"tx_select_{idx}"] = False
         st.session_state["tx_select_all"] = False
-        st.session_state["tx_reset_selection"] = False
 
-    with st.container(key="tx_table_grid"):
+    with st.container(key="tx_table_desktop"):
         prev_select_all = st.session_state.get("tx_select_all_prev", False)
         select_all = st.checkbox("全選交易", key="tx_select_all")
         if select_all != prev_select_all:
@@ -1165,6 +1163,29 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             cols[9].markdown(f"<span style='{cell_style_right}'>{row['總額']}</span>", unsafe_allow_html=True)
             st.markdown("<div style='height:1px;background:#2a3748;margin:0.15rem 0 0.2rem 0;'></div>", unsafe_allow_html=True)
 
+    # 手機版：使用原生可橫向捲動表格，避免 st.columns 疊欄。
+    with st.container(key="tx_table_mobile"):
+        select_all_mobile = st.checkbox("全選交易", key="tx_select_all_mobile")
+        mobile_df = display_df.drop(columns=["idx"]).copy()
+        mobile_df.insert(0, "勾選", False)
+
+        edited_mobile_df = st.data_editor(
+            mobile_df,
+            use_container_width=True,
+            hide_index=True,
+            key="tx_mobile_editor",
+            column_config={
+                "勾選": st.column_config.CheckboxColumn("勾選", default=False),
+            },
+            disabled=[col for col in mobile_df.columns if col != "勾選"],
+        )
+        if select_all_mobile:
+            selected_idx = display_df["idx"].astype(int).tolist()
+        else:
+            selected_idx = display_df.loc[edited_mobile_df["勾選"].astype(bool), "idx"].astype(int).tolist()
+
+    st.session_state["tx_reset_selection"] = False
+
     if selected_idx:
         if st.button("🗑️ 刪除勾選", type="primary"):
             st.session_state["tx_delete_confirm"] = True
@@ -1184,6 +1205,7 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             st.session_state["tx_delete_confirm"] = False
             st.session_state["tx_delete_targets"] = []
             st.session_state["tx_reset_selection"] = True
+            st.session_state["tx_select_all_mobile"] = False
             st.success(f"已刪除 {deleted_count} 筆交易")
             st.rerun()
         if c2.button("取消", use_container_width=True):
