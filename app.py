@@ -1050,6 +1050,13 @@ def render_transaction_management(transactions: List[Dict]) -> None:
         }
     )
 
+    # 只能在 widget 建立前調整對應 key，避免 Streamlit session_state 例外。
+    if st.session_state.get("tx_reset_selection", False):
+        for idx in display_df["idx"].tolist():
+            st.session_state[f"tx_select_{idx}"] = False
+        st.session_state["tx_select_all"] = False
+        st.session_state["tx_reset_selection"] = False
+
     prev_select_all = st.session_state.get("tx_select_all_prev", False)
     select_all = st.checkbox("全選交易", key="tx_select_all")
     if select_all != prev_select_all:
@@ -1109,8 +1116,7 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             save_transactions(transactions)
             st.session_state["tx_delete_confirm"] = False
             st.session_state["tx_delete_targets"] = []
-            for idx in display_df["idx"].tolist():
-                st.session_state[f"tx_select_{idx}"] = False
+            st.session_state["tx_reset_selection"] = True
             st.success(f"已刪除 {deleted_count} 筆交易")
             st.rerun()
         if c2.button("取消", use_container_width=True):
