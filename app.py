@@ -982,9 +982,6 @@ def render_saving_goal_settings() -> None:
 
 def render_strategy_signals(summary: Dict, prices: Dict[str, float]) -> None:
     st.markdown("#### 策略建議")
-    st.caption("燈號規則：綠=正常 DCA、黃=回檔可加碼、紅=超區間先再平衡。")
-    st.caption("執行方式：薪水入帳後每月單次買入（不分批）。")
-    render_saving_goal_settings()
 
     high_6m = get_6m_high(TW_SYMBOL_MAP["0050"])
     add_on = 0.0
@@ -1059,7 +1056,6 @@ def render_strategy_signals(summary: Dict, prices: Dict[str, float]) -> None:
         unsafe_allow_html=True,
     )
 
-    st.caption("再平衡與提醒已整合到上方『整體績效』卡片。")
 
     if high_6m and high_6m > 0:
         st.caption(f"0050 相對六個月高點：{drop_pct:.2f}%｜市場狀態：{market_state}")
@@ -1173,15 +1169,6 @@ def render_transaction_management(transactions: List[Dict]) -> None:
 def main() -> None:
     st.set_page_config(page_title="0050/0056 投資追蹤", layout="wide")
     render_theme()
-    st.markdown(
-        """
-        <div class="hero">
-            <h2>0050 / 0056 投資部位追蹤器</h2>
-            <p>即時股價、資產總覽、交易管理與再平衡建議，整合在單一儀表板。</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
     transactions = load_transactions()
 
@@ -1214,6 +1201,13 @@ def main() -> None:
     hold_0056 = summary["details"]["0056"]["shares"]
     pnl_50_class = "metric-positive" if d50["unrealized_pnl"] >= 0 else "metric-negative"
     pnl_56_class = "metric-positive" if d56["unrealized_pnl"] >= 0 else "metric-negative"
+
+    strategy_col, saving_col = st.columns([1, 1], gap="large")
+    with strategy_col:
+        render_strategy_signals(summary, prices)
+    with saving_col:
+        st.markdown("#### 存錢目標設定")
+        render_saving_goal_settings()
 
     c1, c2, c3 = st.columns([1.15, 1.15, 0.9], gap="small")
     c1.markdown(
@@ -1277,8 +1271,6 @@ def main() -> None:
 
     with tab_overview:
         render_overview_dashboard(transactions, summary, prices)
-        st.markdown("---")
-        render_strategy_signals(summary, prices)
 
     with tab_trade_manage:
         left_col, right_col = st.columns([0.85, 1.15], gap="large")
