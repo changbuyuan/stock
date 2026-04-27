@@ -1120,6 +1120,8 @@ def render_transaction_management(transactions: List[Dict]) -> None:
         for idx in display_df["idx"].tolist():
             st.session_state[f"tx_select_{idx}"] = False
         st.session_state["tx_select_all"] = False
+        st.session_state["tx_mobile_checked_map"] = {}
+        st.session_state["tx_select_all_mobile_prev"] = False
 
     with st.container(key="tx_table_desktop"):
         prev_select_all = st.session_state.get("tx_select_all_prev", False)
@@ -1165,9 +1167,18 @@ def render_transaction_management(transactions: List[Dict]) -> None:
 
     # 手機版：使用原生可橫向捲動表格，避免 st.columns 疊欄。
     with st.container(key="tx_table_mobile"):
+        tx_indices = display_df["idx"].astype(int).tolist()
+        checked_map = st.session_state.get("tx_mobile_checked_map", {})
+        checked_map = {idx: bool(checked_map.get(idx, False)) for idx in tx_indices}
+
         select_all_mobile = st.checkbox("全選交易", key="tx_select_all_mobile")
+        prev_select_all_mobile = st.session_state.get("tx_select_all_mobile_prev", False)
+        if select_all_mobile != prev_select_all_mobile:
+            checked_map = {idx: bool(select_all_mobile) for idx in tx_indices}
+        st.session_state["tx_select_all_mobile_prev"] = select_all_mobile
+
         mobile_df = display_df.drop(columns=["idx"]).copy()
-        mobile_df.insert(0, "勾選", False)
+        mobile_df.insert(0, "勾選", [checked_map[idx] for idx in tx_indices])
 
         edited_mobile_df = st.data_editor(
             mobile_df,
@@ -1179,10 +1190,11 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             },
             disabled=[col for col in mobile_df.columns if col != "勾選"],
         )
-        if select_all_mobile:
-            selected_idx = display_df["idx"].astype(int).tolist()
-        else:
-            selected_idx = display_df.loc[edited_mobile_df["勾選"].astype(bool), "idx"].astype(int).tolist()
+
+        checked_values = edited_mobile_df["勾選"].astype(bool).tolist()
+        checked_map = {idx: val for idx, val in zip(tx_indices, checked_values)}
+        st.session_state["tx_mobile_checked_map"] = checked_map
+        selected_idx = [idx for idx, val in checked_map.items() if val]
 
     st.session_state["tx_reset_selection"] = False
 
@@ -1205,7 +1217,6 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             st.session_state["tx_delete_confirm"] = False
             st.session_state["tx_delete_targets"] = []
             st.session_state["tx_reset_selection"] = True
-            st.session_state["tx_select_all_mobile"] = False
             st.success(f"已刪除 {deleted_count} 筆交易")
             st.rerun()
         if c2.button("取消", use_container_width=True):
