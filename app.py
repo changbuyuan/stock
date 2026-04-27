@@ -938,44 +938,52 @@ def summarize_strategy_brief(summary: Dict, prices: Dict[str, float]) -> Dict[st
             add_on = 20000
 
     total = summary["total_market_value"]
-    target_0050_ratio, target_0056_ratio = 0.75, 0.25
-    if total >= 8_000_000:
-        target_0050_ratio, target_0056_ratio = 0.65, 0.35
-    elif total >= 5_000_000:
-        target_0050_ratio, target_0056_ratio = 0.70, 0.30
+    target_0050_ratio, target_0056_ratio = 0.85, 0.15
 
     rebalance_text = "再平衡：目前無持倉，先建立部位。"
+    trim_text = ""
+    is_rebalance_month = datetime.now().month in (6, 12)
     if total > 0:
         mv_0050 = summary["details"]["0050"]["market_value"]
         mv_0056 = summary["details"]["0056"]["market_value"]
         weight_0050 = mv_0050 / total * 100
         weight_0056 = mv_0056 / total * 100
         out_of_range = (
-            weight_0050 > (target_0050_ratio * 100 + 5)
-            or weight_0050 < (target_0050_ratio * 100 - 10)
-            or weight_0056 > (target_0056_ratio * 100 + 10)
-            or weight_0056 < (target_0056_ratio * 100 - 5)
+            weight_0050 > 90
+            or weight_0050 < 80
+            or weight_0056 > 20
+            or weight_0056 < 10
         )
-        if out_of_range:
+        # 優先順序：1) 加碼 2) 再平衡 3) 減碼
+        if add_on > 0:
+            rebalance_text = "加碼優先：本月最多執行一次，僅用投資預算加碼 0050（上限 60,000）。"
+        elif out_of_range:
             target_0050 = total * target_0050_ratio
             gap_0050 = target_0050 - mv_0050
             if gap_0050 > 0:
-                rebalance_text = f"再平衡：偏離區間，優先補 0050 約 {format_currency(gap_0050)}。"
+                rebalance_text = f"再平衡：已偏離 85/15（容忍 80/20~90/10），優先補 0050 約 {format_currency(gap_0050)}。"
             else:
-                rebalance_text = f"再平衡：偏離區間，優先補 0056 約 {format_currency(abs(gap_0050))}。"
+                rebalance_text = f"再平衡：已偏離 85/15（容忍 80/20~90/10），優先補 0056 約 {format_currency(abs(gap_0050))}。"
         else:
-            rebalance_text = "再平衡：目前在容忍區間內，維持固定投入即可。"
+            if is_rebalance_month:
+                rebalance_text = "再平衡：本月為半年檢查月（6/12 月），目前在容忍區間內，維持 85/15 固定投入。"
+            else:
+                rebalance_text = "再平衡：目前在容忍區間內，維持 85/15 固定投入。"
 
-    reminder_text = "提醒：薪轉後單次買入，不追高、不停扣。"
-    h_1m = get_price_history(TW_SYMBOL_MAP["0050"], period="1mo")
-    if h_1m is not None and not h_1m.empty:
-        month_high = float(h_1m.max())
-        month_drop = (prices["0050"] - month_high) / month_high * 100 if month_high > 0 else 0.0
-        if month_drop <= -5:
-            reminder_text = "提醒：本月回檔 >= 5%，薪轉後可延後 3~5 天再單次買入。"
+        cost_0050 = summary["details"]["0050"]["cost"]
+        unrealized_0050 = summary["details"]["0050"]["unrealized_pnl"]
+        single_return_0050 = (unrealized_0050 / cost_0050 * 100) if cost_0050 > 0 else 0.0
+        if (weight_0050 > 90) or (single_return_0050 >= 50):
+            trim_text = "減碼條件已觸發：可低頻減碼 0050 約 5%~10%，補回 0056 或保留現金。"
+        else:
+            trim_text = "減碼未觸發：維持不追高、不主動加碼上漲段。"
+
+    reminder_text = "提醒：下跌只加碼、不減碼；上漲不追高、等再平衡修正。"
 
     if add_on > 0:
-        reminder_text += f" 目前建議加碼 0050 {format_currency(add_on)}。"
+        reminder_text += f" 目前建議加碼 0050 {format_currency(add_on)}（單月上限 60,000）。"
+    if trim_text:
+        reminder_text += f" {trim_text}"
     return {"rebalance_text": rebalance_text, "reminder_text": reminder_text}
 
 
@@ -1035,44 +1043,49 @@ def render_strategy_signals(summary: Dict, prices: Dict[str, float]) -> None:
             market_state = "大漲（>= +20%）"
 
     total = summary["total_market_value"]
-    total_cost = summary["total_cost"]
-    target_0050_ratio = 0.75
-    target_0056_ratio = 0.25
-    if total >= 8_000_000:
-        target_0050_ratio = 0.65
-        target_0056_ratio = 0.35
-    elif total >= 5_000_000:
-        target_0050_ratio = 0.70
-        target_0056_ratio = 0.30
+    target_0050_ratio = 0.85
+    target_0056_ratio = 0.15
 
     weight_0050 = 0.0
     weight_0056 = 0.0
+    cost_0050 = 0.0
+    single_return_0050 = 0.0
     out_of_range = False
     if total > 0:
         mv_0050 = summary["details"]["0050"]["market_value"]
         mv_0056 = summary["details"]["0056"]["market_value"]
         weight_0050 = mv_0050 / total * 100
         weight_0056 = mv_0056 / total * 100
+        cost_0050 = summary["details"]["0050"]["cost"]
+        if cost_0050 > 0:
+            single_return_0050 = summary["details"]["0050"]["unrealized_pnl"] / cost_0050 * 100
         out_of_range = (
-            weight_0050 > (target_0050_ratio * 100 + 5)
-            or weight_0050 < (target_0050_ratio * 100 - 10)
-            or weight_0056 > (target_0056_ratio * 100 + 10)
-            or weight_0056 < (target_0056_ratio * 100 - 5)
+            weight_0050 > 90
+            or weight_0050 < 80
+            or weight_0056 > 20
+            or weight_0056 < 10
         )
-    # 三色燈號卡
-    if out_of_range:
-        signal_title = "紅燈：優先再平衡"
-        signal_message = "配置超出容忍區間，先用新資金修正權重，再考慮小額賣出。"
-        signal_bg = "#fee2e2"
-        signal_color = "#991b1b"
-    elif high_6m and drop_pct <= -10:
-        signal_title = "黃燈：回檔可加碼"
-        signal_message = f"0050 跌幅 {drop_pct:.2f}%，建議加碼 0050 {format_currency(add_on)}。"
+    trim_triggered = (weight_0050 > 90) or (single_return_0050 >= 50)
+
+    # 三色燈號卡（優先順序：加碼 > 再平衡 > 減碼）
+    if high_6m and drop_pct <= -10:
+        signal_title = "黃燈：下跌加碼 0050"
+        signal_message = f"0050 跌幅 {drop_pct:.2f}%，建議加碼 {format_currency(add_on)}（每月最多一次，單月上限 60,000）。"
         signal_bg = "#fef3c7"
         signal_color = "#92400e"
+    elif out_of_range:
+        signal_title = "紅燈：優先再平衡"
+        signal_message = "配置已偏離 85/15（容忍 80/20~90/10），優先用新投入調回，再考慮小幅賣出。"
+        signal_bg = "#fee2e2"
+        signal_color = "#991b1b"
+    elif trim_triggered:
+        signal_title = "橘燈：低頻減碼條件達成"
+        signal_message = "0050 占比 > 90% 或單一報酬 >= +50%，可減碼 5%~10%，補回 0056 或保留現金。"
+        signal_bg = "#ffedd5"
+        signal_color = "#9a3412"
     else:
         signal_title = "綠燈：正常 DCA"
-        signal_message = "維持每月 75/25 定期投入，不追高、不中斷。"
+        signal_message = "維持 85/15 規則化投入；上漲不追高、下跌才加碼。"
         signal_bg = "#dcfce7"
         signal_color = "#166534"
 
