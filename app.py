@@ -12,6 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 
 
 DATA_FILE = Path(__file__).with_name("stock_portfolio_data.json")
@@ -132,30 +133,61 @@ def build_positions(transactions: List[Dict]) -> Dict[str, Position]:
     return positions
 
 
+def get_last_transaction_price(transactions: List[Dict], symbol: str) -> float | None:
+    for tx in reversed(transactions):
+        if tx.get("symbol") != symbol:
+            continue
+        try:
+            price = float(tx.get("price", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if price > 0:
+            return price
+    return None
+
+
 @st.cache_data(ttl=30)
 def get_live_price(symbol_tw: str) -> float | None:
-    ticker = yf.Ticker(symbol_tw)
-    history = ticker.history(period="1d", interval="1m")
-    if history.empty:
-        history = ticker.history(period="5d")
-    if history.empty:
+    try:
+        ticker = yf.Ticker(symbol_tw)
+        history = ticker.history(period="1d", interval="1m")
+        if history.empty:
+            history = ticker.history(period="5d")
+    except YFRateLimitError:
         return None
-    return float(history["Close"].dropna().iloc[-1])
+    except Exception:
+        return None
+    if history.empty or "Close" not in history.columns:
+        return None
+    close = history["Close"].dropna()
+    if close.empty:
+        return None
+    return float(close.iloc[-1])
 
 
 @st.cache_data(ttl=600)
 def get_6m_high(symbol_tw: str) -> float | None:
-    ticker = yf.Ticker(symbol_tw)
-    history = ticker.history(period="6mo")
-    if history.empty:
+    try:
+        ticker = yf.Ticker(symbol_tw)
+        history = ticker.history(period="6mo")
+    except YFRateLimitError:
+        return None
+    except Exception:
+        return None
+    if history.empty or "High" not in history.columns:
         return None
     return float(history["High"].max())
 
 
 @st.cache_data(ttl=600)
 def get_price_history(symbol_tw: str, period: str = "6mo") -> pd.Series | None:
-    ticker = yf.Ticker(symbol_tw)
-    history = ticker.history(period=period)
+    try:
+        ticker = yf.Ticker(symbol_tw)
+        history = ticker.history(period=period)
+    except YFRateLimitError:
+        return None
+    except Exception:
+        return None
     if history.empty or "Close" not in history.columns:
         return None
     close = history["Close"].dropna()
@@ -166,8 +198,13 @@ def get_price_history(symbol_tw: str, period: str = "6mo") -> pd.Series | None:
 
 @st.cache_data(ttl=600)
 def get_price_history_from_start(symbol_tw: str, start_date: str) -> pd.Series | None:
-    ticker = yf.Ticker(symbol_tw)
-    history = ticker.history(start=start_date)
+    try:
+        ticker = yf.Ticker(symbol_tw)
+        history = ticker.history(start=start_date)
+    except YFRateLimitError:
+        return None
+    except Exception:
+        return None
     if history.empty or "Close" not in history.columns:
         return None
     close = history["Close"].dropna()
@@ -1150,9 +1187,24 @@ def main() -> None:
 
     price_0050 = get_live_price(TW_SYMBOL_MAP["0050"])
     price_0056 = get_live_price(TW_SYMBOL_MAP["0056"])
+
+    used_fallback = False
+    if price_0050 is None:
+        fallback_0050 = get_last_transaction_price(transactions, "0050")
+        if fallback_0050 is not None:
+            price_0050 = fallback_0050
+            used_fallback = True
+    if price_0056 is None:
+        fallback_0056 = get_last_transaction_price(transactions, "0056")
+        if fallback_0056 is not None:
+            price_0056 = fallback_0056
+            used_fallback = True
+
     if price_0050 is None or price_0056 is None:
         st.error("即時股價抓取失敗，請檢查網路後重試。")
         return
+    if used_fallback:
+        st.warning("即時股價服務暫時受限，已暫用最近交易價顯示。")
 
     prices = {"0050": price_0050, "0056": price_0056}
     summary = compute_summary(transactions, prices)
