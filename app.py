@@ -511,6 +511,19 @@ def render_theme() -> None:
         color: var(--text-primary);
         margin: 0.15rem 0 0.45rem 0;
     }
+    @media (max-width: 768px) {
+        div[data-testid="stHorizontalBlock"] {
+            gap: 0.55rem !important;
+        }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+            min-width: 100% !important;
+            width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+        .section-card {
+            margin-top: 0.45rem;
+        }
+    }
 </style>
         """,
         unsafe_allow_html=True,
