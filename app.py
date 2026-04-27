@@ -1113,7 +1113,8 @@ def render_transaction_management(transactions: List[Dict]) -> None:
         }
     )
 
-    selected_idx: List[int] = []
+    selected_idx_desktop: List[int] = []
+    selected_idx_mobile: List[int] = []
 
     # 桌機版：保留原本列內勾選表格風格。
     if st.session_state.get("tx_reset_selection", False):
@@ -1147,8 +1148,8 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             idx_val = int(row["idx"])
             checked = cols[0].checkbox("", key=f"tx_select_{idx_val}", label_visibility="collapsed")
             if checked:
-                selected_idx.append(idx_val)
-            row_bg = "rgba(88, 137, 214, 0.16)" if checked else "transparent"
+                selected_idx_desktop.append(idx_val)
+            row_bg = "transparent"
             cell_style_left = (
                 "display:block;padding:0.18rem 0.25rem;border-radius:6px;"
                 f"background:{row_bg};color:var(--text-primary);font-size:0.86rem;"
@@ -1194,9 +1195,10 @@ def render_transaction_management(transactions: List[Dict]) -> None:
         checked_values = edited_mobile_df["勾選"].astype(bool).tolist()
         checked_map = {idx: val for idx, val in zip(tx_indices, checked_values)}
         st.session_state["tx_mobile_checked_map"] = checked_map
-        selected_idx = [idx for idx, val in checked_map.items() if val]
+        selected_idx_mobile = [idx for idx, val in checked_map.items() if val]
 
     st.session_state["tx_reset_selection"] = False
+    selected_idx = sorted(set(selected_idx_desktop) | set(selected_idx_mobile))
 
     if selected_idx:
         if st.button("🗑️ 刪除勾選", type="primary"):
