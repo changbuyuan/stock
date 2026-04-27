@@ -515,6 +515,18 @@ def render_theme() -> None:
         div[data-testid="stHorizontalBlock"] {
             gap: 0.55rem !important;
         }
+        .st-key-tx_table_grid div[data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            padding-bottom: 0.15rem;
+            -webkit-overflow-scrolling: touch;
+        }
+        .st-key-tx_table_grid div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+            min-width: max-content !important;
+            width: auto !important;
+            flex: 0 0 auto !important;
+        }
         .section-card {
             margin-top: 0.45rem;
         }
@@ -1104,26 +1116,54 @@ def render_transaction_management(transactions: List[Dict]) -> None:
         }
     )
 
-    st.dataframe(
-        display_df.drop(columns=["idx"]),
-        use_container_width=True,
-        hide_index=True,
-    )
+    # 只能在 widget 建立前調整對應 key，避免 Streamlit session_state 例外。
+    if st.session_state.get("tx_reset_selection", False):
+        for idx in display_df["idx"].tolist():
+            st.session_state[f"tx_select_{idx}"] = False
+        st.session_state["tx_select_all"] = False
+        st.session_state["tx_reset_selection"] = False
 
-    tx_options = display_df["idx"].astype(int).tolist()
-    label_map = {
-        int(row["idx"]): f"{row['時間']} | {row['股票代號']} | {row['買賣']} | {row['總額']}"
-        for _, row in display_df.iterrows()
-    }
-    select_all = st.checkbox("全選交易", key="tx_select_all")
-    default_selection = tx_options if select_all else []
-    selected_idx = st.multiselect(
-        "選擇要刪除的交易",
-        options=tx_options,
-        default=default_selection,
-        format_func=lambda idx: label_map.get(idx, str(idx)),
-        key="tx_delete_selection",
-    )
+    with st.container(key="tx_table_grid"):
+        prev_select_all = st.session_state.get("tx_select_all_prev", False)
+        select_all = st.checkbox("全選交易", key="tx_select_all")
+        if select_all != prev_select_all:
+            for idx in display_df["idx"].tolist():
+                st.session_state[f"tx_select_{idx}"] = bool(select_all)
+        st.session_state["tx_select_all_prev"] = select_all
+
+        col_ratios = [0.42, 1.05, 0.9, 0.7, 0.9, 1.05, 1.2, 0.8, 0.8, 1.2]
+        header_cols = st.columns(col_ratios, gap="small")
+        header_labels = ["勾選", "時間", "股票代號", "買賣", "成交均價", "股數", "金額", "手續費", "交易稅", "總額"]
+        for col, label in zip(header_cols, header_labels):
+            col.markdown(
+                f"<div style='color:var(--text-primary);font-size:0.95rem;font-weight:700;padding-bottom:0.15rem;'>{label}</div>",
+                unsafe_allow_html=True,
+            )
+        st.markdown("<div style='height:1px;background:#2a3748;margin:0.08rem 0 0.2rem 0;'></div>", unsafe_allow_html=True)
+
+        selected_idx: List[int] = []
+        for _, row in display_df.iterrows():
+            cols = st.columns(col_ratios, gap="small")
+            idx_val = int(row["idx"])
+            checked = cols[0].checkbox("", key=f"tx_select_{idx_val}", label_visibility="collapsed")
+            if checked:
+                selected_idx.append(idx_val)
+            row_bg = "rgba(88, 137, 214, 0.16)" if checked else "transparent"
+            cell_style_left = (
+                "display:block;padding:0.18rem 0.25rem;border-radius:6px;"
+                f"background:{row_bg};color:var(--text-primary);font-size:0.86rem;"
+            )
+            cell_style_right = cell_style_left + "text-align:right;"
+            cols[1].markdown(f"<span style='{cell_style_left}'>{row['時間']}</span>", unsafe_allow_html=True)
+            cols[2].markdown(f"<span style='{cell_style_left}'>{row['股票代號']}</span>", unsafe_allow_html=True)
+            cols[3].markdown(f"<span style='{cell_style_left}'>{row['買賣']}</span>", unsafe_allow_html=True)
+            cols[4].markdown(f"<span style='{cell_style_right}'>{row['成交均價']}</span>", unsafe_allow_html=True)
+            cols[5].markdown(f"<span style='{cell_style_right}'>{row['股數']}</span>", unsafe_allow_html=True)
+            cols[6].markdown(f"<span style='{cell_style_right}'>{row['金額']}</span>", unsafe_allow_html=True)
+            cols[7].markdown(f"<span style='{cell_style_right}'>{row['手續費']}</span>", unsafe_allow_html=True)
+            cols[8].markdown(f"<span style='{cell_style_right}'>{row['交易稅']}</span>", unsafe_allow_html=True)
+            cols[9].markdown(f"<span style='{cell_style_right}'>{row['總額']}</span>", unsafe_allow_html=True)
+            st.markdown("<div style='height:1px;background:#2a3748;margin:0.15rem 0 0.2rem 0;'></div>", unsafe_allow_html=True)
 
     if selected_idx:
         if st.button("🗑️ 刪除勾選", type="primary"):
@@ -1143,8 +1183,7 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             save_transactions(transactions)
             st.session_state["tx_delete_confirm"] = False
             st.session_state["tx_delete_targets"] = []
-            st.session_state["tx_delete_selection"] = []
-            st.session_state["tx_select_all"] = False
+            st.session_state["tx_reset_selection"] = True
             st.success(f"已刪除 {deleted_count} 筆交易")
             st.rerun()
         if c2.button("取消", use_container_width=True):
