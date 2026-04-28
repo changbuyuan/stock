@@ -258,6 +258,27 @@ def format_side(side: str) -> str:
     return "買進" if side == "buy" else "賣出"
 
 
+def require_authentication() -> bool:
+    password = st.secrets.get("APP_PASSWORD")
+    if not password:
+        st.error("尚未設定 APP_PASSWORD，請先到 Streamlit Secrets 設定。")
+        st.info("本機可在 `.streamlit/secrets.toml` 設定：APP_PASSWORD = \"your-password\"")
+        return False
+
+    if st.session_state.get("authenticated", False):
+        return True
+
+    st.markdown("## 私人管理登入")
+    input_password = st.text_input("請輸入密碼", type="password")
+    if st.button("登入", type="primary", use_container_width=True):
+        if input_password == password:
+            st.session_state["authenticated"] = True
+            st.success("登入成功")
+            st.rerun()
+        st.error("密碼錯誤")
+    return False
+
+
 def render_theme() -> None:
     st.markdown(
         """
@@ -1254,6 +1275,14 @@ def render_transaction_management(transactions: List[Dict]) -> None:
 def main() -> None:
     st.set_page_config(page_title="0050/0056 投資追蹤", layout="wide")
     render_theme()
+
+    if not require_authentication():
+        return
+
+    top_right = st.columns([8, 1])[1]
+    if top_right.button("登出", use_container_width=True):
+        st.session_state["authenticated"] = False
+        st.rerun()
 
     transactions = load_transactions()
 
