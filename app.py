@@ -146,6 +146,25 @@ def get_last_transaction_price(transactions: List[Dict], symbol: str) -> float |
     return None
 
 
+def resolve_display_price(
+    symbol: str, live_price: float | None, transactions: List[Dict], session_key: str
+) -> tuple[float, str]:
+    """回傳可展示價格與來源，避免即時價失敗時整頁中斷。"""
+    if live_price is not None and live_price > 0:
+        st.session_state[session_key] = float(live_price)
+        return float(live_price), "live"
+
+    cached = st.session_state.get(session_key)
+    if isinstance(cached, (int, float)) and float(cached) > 0:
+        return float(cached), "cache"
+
+    tx_price = get_last_transaction_price(transactions, symbol)
+    if tx_price is not None and tx_price > 0:
+        return float(tx_price), "tx"
+
+    return 0.0, "none"
+
+
 @st.cache_data(ttl=30)
 def get_live_price(symbol_tw: str) -> float | None:
     try:
@@ -1286,26 +1305,13 @@ def main() -> None:
 
     transactions = load_transactions()
 
-    price_0050 = get_live_price(TW_SYMBOL_MAP["0050"])
-    price_0056 = get_live_price(TW_SYMBOL_MAP["0056"])
+    live_0050 = get_live_price(TW_SYMBOL_MAP["0050"])
+    live_0056 = get_live_price(TW_SYMBOL_MAP["0056"])
+    price_0050, src_0050 = resolve_display_price("0050", live_0050, transactions, "last_price_0050")
+    price_0056, src_0056 = resolve_display_price("0056", live_0056, transactions, "last_price_0056")
 
-    used_fallback = False
-    if price_0050 is None:
-        fallback_0050 = get_last_transaction_price(transactions, "0050")
-        if fallback_0050 is not None:
-            price_0050 = fallback_0050
-            used_fallback = True
-    if price_0056 is None:
-        fallback_0056 = get_last_transaction_price(transactions, "0056")
-        if fallback_0056 is not None:
-            price_0056 = fallback_0056
-            used_fallback = True
-
-    if price_0050 is None or price_0056 is None:
-        st.error("即時股價抓取失敗，請檢查網路後重試。")
-        return
-    if used_fallback:
-        st.warning("即時股價服務暫時受限，已暫用最近交易價顯示。")
+    if src_0050 != "live" or src_0056 != "live":
+        st.warning("即時股價服務暫時受限，已改用快取或最近交易價顯示。")
 
     prices = {"0050": price_0050, "0056": price_0056}
     summary = compute_summary(transactions, prices)
