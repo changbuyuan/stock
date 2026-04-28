@@ -1183,7 +1183,7 @@ def render_transaction_management(transactions: List[Dict]) -> None:
         for _, row in display_df.iterrows():
             cols = st.columns(col_ratios, gap="small")
             idx_val = int(row["idx"])
-            checked = cols[0].checkbox("", key=f"tx_select_{idx_val}", label_visibility="collapsed")
+            checked = cols[0].checkbox("選取交易", key=f"tx_select_{idx_val}", label_visibility="collapsed")
             if checked:
                 selected_idx_desktop.append(idx_val)
             row_bg = "transparent"
