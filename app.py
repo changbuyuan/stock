@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+from gspread.exceptions import APIError
 from yfinance.exceptions import YFRateLimitError
 
 
@@ -78,6 +80,30 @@ def _format_sheet_exception(exc: Exception, action: str) -> str:
     return f"Google Sheet {action}失敗：{type(exc).__name__}: {exc}"
 
 
+def _is_quota_error(exc: Exception) -> bool:
+    return "Quota exceeded" in str(exc)
+
+
+def _run_sheet_op_with_retry(action: str, fn):
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            return fn()
+        except APIError as exc:
+            last_exc = exc
+            if not _is_quota_error(exc) or attempt == 2:
+                raise
+            time.sleep(1.2 * (attempt + 1))
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 2:
+                raise
+            time.sleep(0.6 * (attempt + 1))
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"Google Sheet {action}失敗")
+
+
 def _get_cached_payload() -> Dict | None:
     payload = st.session_state.get("payload_cache")
     if isinstance(payload, dict):
@@ -111,7 +137,9 @@ def _open_or_create_worksheet(spreadsheet, title: str, headers: List[str]):
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=title, rows=2000, cols=max(12, len(headers) + 2))
         ws.update("A1", [headers])
-    if ws.row_count == 0:
+        return ws
+    row1 = ws.row_values(1)
+    if row1 != headers:
         ws.update("A1", [headers])
     return ws
 
@@ -143,9 +171,11 @@ def _sheet_context():
         return None
     try:
         client = _get_gspread_client(cfg["service_account_info"])
-        spreadsheet = client.open_by_key(cfg["spreadsheet_id"])
-        tx_ws = _open_or_create_worksheet(spreadsheet, cfg["tx_sheet"], GSHEET_TX_HEADERS)
-        settings_ws = _open_or_create_worksheet(spreadsheet, cfg["settings_sheet"], GSHEET_SETTING_HEADERS)
+        spreadsheet = _run_sheet_op_with_retry("連線", lambda: client.open_by_key(cfg["spreadsheet_id"]))
+        tx_ws = _run_sheet_op_with_retry("連線", lambda: _open_or_create_worksheet(spreadsheet, cfg["tx_sheet"], GSHEET_TX_HEADERS))
+        settings_ws = _run_sheet_op_with_retry(
+            "連線", lambda: _open_or_create_worksheet(spreadsheet, cfg["settings_sheet"], GSHEET_SETTING_HEADERS)
+        )
         st.session_state["sheet_error"] = ""
         return tx_ws, settings_ws
     except Exception as exc:
@@ -160,7 +190,7 @@ def _load_payload_from_sheet() -> Dict | None:
         return None
     tx_ws, settings_ws = context
     try:
-        tx_rows = tx_ws.get_all_records()
+        tx_rows = _run_sheet_op_with_retry("讀取", lambda: tx_ws.get_all_records())
         transactions: List[Dict] = []
         for row in tx_rows:
             symbol = normalize_symbol(row.get("symbol", ""))
@@ -178,7 +208,7 @@ def _load_payload_from_sheet() -> Dict | None:
                 }
             )
 
-        setting_rows = settings_ws.get_all_records()
+        setting_rows = _run_sheet_op_with_retry("讀取", lambda: settings_ws.get_all_records())
         settings = {
             "current_savings": 0.0,
             "savings_goal": 500000.0,
@@ -211,8 +241,8 @@ def _save_payload_to_sheet(payload: Dict) -> bool:
         tx_values = [GSHEET_TX_HEADERS]
         for tx in payload.get("transactions", []):
             tx_values.append(_tx_to_row(tx))
-        tx_ws.clear()
-        tx_ws.update("A1", tx_values)
+        _run_sheet_op_with_retry("寫入", lambda: tx_ws.clear())
+        _run_sheet_op_with_retry("寫入", lambda: tx_ws.update("A1", tx_values))
 
         ss = payload.get("saving_settings", {})
         settings_values = [
@@ -223,8 +253,8 @@ def _save_payload_to_sheet(payload: Dict) -> bool:
                 float(ss.get("monthly_saving", 10000) or 0),
             ],
         ]
-        settings_ws.clear()
-        settings_ws.update("A1", settings_values)
+        _run_sheet_op_with_retry("寫入", lambda: settings_ws.clear())
+        _run_sheet_op_with_retry("寫入", lambda: settings_ws.update("A1", settings_values))
 
         st.session_state["data_backend"] = "google_sheets"
         st.session_state["sheet_error"] = ""
@@ -275,7 +305,7 @@ def append_transaction_to_sheet(tx: Dict) -> bool:
         return False
     tx_ws, _ = context
     try:
-        tx_ws.append_row(_tx_to_row(tx), value_input_option="USER_ENTERED")
+        _run_sheet_op_with_retry("寫入", lambda: tx_ws.append_row(_tx_to_row(tx), value_input_option="USER_ENTERED"))
         st.session_state["data_backend"] = "google_sheets"
         st.session_state["sheet_error"] = ""
         return True
@@ -292,16 +322,19 @@ def save_saving_settings_to_sheet(settings: Dict[str, float]) -> bool:
         return False
     _, settings_ws = context
     try:
-        settings_ws.update(
-            "A1",
-            [
-                GSHEET_SETTING_HEADERS,
+        _run_sheet_op_with_retry(
+            "寫入",
+            lambda: settings_ws.update(
+                "A1",
                 [
-                    float(settings.get("current_savings", 0) or 0),
-                    float(settings.get("savings_goal", 500000) or 0),
-                    float(settings.get("monthly_saving", 10000) or 0),
+                    GSHEET_SETTING_HEADERS,
+                    [
+                        float(settings.get("current_savings", 0) or 0),
+                        float(settings.get("savings_goal", 500000) or 0),
+                        float(settings.get("monthly_saving", 10000) or 0),
+                    ],
                 ],
-            ],
+            ),
         )
         st.session_state["data_backend"] = "google_sheets"
         st.session_state["sheet_error"] = ""
@@ -355,6 +388,61 @@ def save_saving_settings(current_savings: float, savings_goal: float, monthly_sa
     if not save_saving_settings_to_sheet(new_settings):
         st.error("Google Sheet 寫入失敗，存錢設定未儲存，請稍後再試。")
     _set_cached_payload(payload)
+
+
+def force_reload_from_sheet() -> bool:
+    st.session_state.pop("payload_cache", None)
+    payload = _load_payload_from_sheet()
+    if payload is None:
+        return False
+    _set_cached_payload(payload)
+    return True
+
+
+def repair_transactions_in_sheet() -> tuple[bool, str]:
+    payload = _get_cached_payload() or load_payload()
+    txs = payload.get("transactions", [])
+    if not isinstance(txs, list):
+        txs = []
+    cleaned: List[Dict] = []
+    fixed_count = 0
+    skipped_count = 0
+    for tx in txs:
+        symbol = normalize_symbol(tx.get("symbol", ""))
+        side = str(tx.get("side", "")).lower()
+        if symbol not in ALLOWED_SYMBOLS or side not in ("buy", "sell"):
+            skipped_count += 1
+            continue
+        try:
+            price = float(tx.get("price", 0) or 0)
+            shares = float(tx.get("shares", 0) or 0)
+            amount = float(tx.get("amount", 0) or 0)
+            fee = float(tx.get("fee", 0) or 0)
+            tax = float(tx.get("tax", 0) or 0)
+            total = float(tx.get("total", 0) or 0)
+        except (TypeError, ValueError):
+            skipped_count += 1
+            continue
+        new_tx = {
+            "timestamp": str(tx.get("timestamp", "")),
+            "symbol": symbol,
+            "side": side,
+            "price": price,
+            "shares": shares,
+            "amount": amount,
+            "fee": fee,
+            "tax": tax,
+            "total": total,
+        }
+        if any(new_tx.get(k) != tx.get(k) for k in new_tx.keys()):
+            fixed_count += 1
+        cleaned.append(new_tx)
+
+    payload["transactions"] = cleaned
+    if not _save_payload_to_sheet(payload):
+        return False, "Google Sheet 寫入失敗，修復未儲存。"
+    _set_cached_payload(payload)
+    return True, f"修復完成：修正 {fixed_count} 筆，移除無效 {skipped_count} 筆。"
 
 
 def build_positions(transactions: List[Dict]) -> Dict[str, Position]:
@@ -1661,6 +1749,20 @@ def main() -> None:
     if latest_updates:
         st.caption(f"股價上次成功更新：{max(latest_updates)}")
     st.caption("資料來源：Google Sheet")
+
+    with st.expander("資料連線與修復工具", expanded=False):
+        m1, m2 = st.columns(2)
+        if m1.button("重新從 Google Sheet 讀取", width="stretch", key="reload_sheet_btn"):
+            if force_reload_from_sheet():
+                st.success("已重新同步最新資料。")
+                st.rerun()
+            st.error("重新讀取失敗，請稍後再試。")
+        if m2.button("修復交易代碼/異常列", width="stretch", key="repair_sheet_btn"):
+            ok, msg = repair_transactions_in_sheet()
+            if ok:
+                st.success(msg)
+                st.rerun()
+            st.error(msg)
 
     summary = compute_summary(transactions, prices)
     d50 = summary["details"]["0050"]
