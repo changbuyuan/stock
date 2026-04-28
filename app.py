@@ -5,7 +5,6 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List
 
 import gspread
@@ -17,8 +16,6 @@ import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 
 
-DATA_FILE = Path(__file__).with_name("stock_portfolio_data.json")
-BACKUP_FILE = Path(__file__).with_name("stock_portfolio_data.bak.json")
 TW_SYMBOL_MAP = {"0050": "0050.TW", "0056": "0056.TW"}
 ALLOWED_SYMBOLS = tuple(TW_SYMBOL_MAP.keys())
 MAX_PRICE = 1_000_000.0
@@ -77,10 +74,7 @@ def normalize_symbol(raw_symbol: Any) -> str:
 def _format_sheet_exception(exc: Exception, action: str) -> str:
     text = str(exc)
     if "Quota exceeded" in text:
-        return (
-            f"Google Sheet {action}失敗：已達 API 讀寫配額，請稍等 1 分鐘後重試。"
-            "（已暫時改用本機 JSON）"
-        )
+        return f"Google Sheet {action}失敗：已達 API 讀寫配額，請稍等 1 分鐘後重試。"
     return f"Google Sheet {action}失敗：{type(exc).__name__}: {exc}"
 
 
@@ -93,6 +87,17 @@ def _get_cached_payload() -> Dict | None:
 
 def _set_cached_payload(payload: Dict) -> None:
     st.session_state["payload_cache"] = deepcopy(payload if isinstance(payload, dict) else {})
+
+
+def _default_payload() -> Dict:
+    return {
+        "transactions": [],
+        "saving_settings": {
+            "current_savings": 0.0,
+            "savings_goal": 500000.0,
+            "monthly_saving": 10000.0,
+        },
+    }
 
 
 @st.cache_resource
@@ -164,7 +169,7 @@ def _load_payload_from_sheet() -> Dict | None:
         return {"transactions": transactions, "saving_settings": settings}
     except Exception as exc:
         _set_sheet_error(_format_sheet_exception(exc, "讀取"))
-        st.session_state["data_backend"] = "local_json"
+        st.session_state["data_backend"] = "google_sheets_error"
         return None
 
 
@@ -219,7 +224,7 @@ def _save_payload_to_sheet(payload: Dict) -> bool:
         return True
     except Exception as exc:
         _set_sheet_error(_format_sheet_exception(exc, "寫入"))
-        st.session_state["data_backend"] = "local_json"
+        st.session_state["data_backend"] = "google_sheets_error"
         return False
 
 
@@ -244,77 +249,16 @@ def load_payload() -> Dict:
         _set_cached_payload(sheet_payload)
         return sheet_payload
 
-    if not DATA_FILE.exists():
-        st.session_state["data_backend"] = "local_json"
-        _set_cached_payload({})
-        return {}
-    try:
-        payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        st.session_state["data_backend"] = "local_json"
-        _set_cached_payload({})
-        return {}
-    st.session_state["data_backend"] = "local_json"
-    safe_payload = payload if isinstance(payload, dict) else {}
+    safe_payload = _default_payload()
     _set_cached_payload(safe_payload)
     return safe_payload
 
 
-def save_payload(payload: Dict) -> None:
+def save_payload(payload: Dict) -> bool:
     _set_cached_payload(payload)
     if _save_payload_to_sheet(payload):
-        return
-
-    if DATA_FILE.exists():
-        try:
-            BACKUP_FILE.write_text(DATA_FILE.read_text(encoding="utf-8"), encoding="utf-8")
-        except OSError:
-            # 備份失敗不應阻斷主流程，仍繼續寫入主檔案。
-            pass
-    DATA_FILE.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    st.session_state["data_backend"] = "local_json"
-
-
-def restore_payload_from_backup() -> bool:
-    if not BACKUP_FILE.exists():
-        return False
-    try:
-        DATA_FILE.write_text(BACKUP_FILE.read_text(encoding="utf-8"), encoding="utf-8")
-        st.session_state.pop("payload_cache", None)
         return True
-    except OSError:
-        return False
-
-
-def try_sync_local_json_to_sheet_once() -> None:
-    if st.session_state.get("gsheet_sync_done", False):
-        return
-    st.session_state["gsheet_sync_done"] = True
-
-    cfg = _get_google_sheet_config()
-    if not (cfg["enabled"] and cfg["spreadsheet_id"] and cfg["service_account_info"]):
-        return
-    if not DATA_FILE.exists():
-        return
-
-    try:
-        local_payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    if not isinstance(local_payload, dict):
-        return
-
-    sheet_payload = _load_payload_from_sheet()
-    if sheet_payload is None:
-        return
-
-    sheet_has_data = bool(sheet_payload.get("transactions")) or bool(sheet_payload.get("saving_settings"))
-    local_has_data = bool(local_payload.get("transactions")) or bool(local_payload.get("saving_settings"))
-    if local_has_data and not sheet_has_data:
-        _save_payload_to_sheet(local_payload)
+    return False
 
 
 def load_transactions() -> List[Dict]:
@@ -326,7 +270,8 @@ def load_transactions() -> List[Dict]:
 def save_transactions(transactions: List[Dict]) -> None:
     payload = _get_cached_payload() or load_payload()
     payload["transactions"] = transactions
-    save_payload(payload)
+    if not save_payload(payload):
+        st.error("Google Sheet 寫入失敗，交易未儲存，請稍後再試。")
 
 
 def load_saving_settings() -> Dict[str, float]:
@@ -353,7 +298,8 @@ def save_saving_settings(current_savings: float, savings_goal: float, monthly_sa
         "savings_goal": float(savings_goal),
         "monthly_saving": float(monthly_saving),
     }
-    save_payload(payload)
+    if not save_payload(payload):
+        st.error("Google Sheet 寫入失敗，存錢設定未儲存，請稍後再試。")
 
 
 def build_positions(transactions: List[Dict]) -> Dict[str, Position]:
@@ -1613,22 +1559,16 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             st.session_state["tx_delete_targets"] = []
             st.rerun()
 
-    with st.expander("資料還原（備份）", expanded=False):
-        st.caption("若誤刪或資料異常，可還原最近一次自動備份。")
-        if st.button("還原最近備份", width="stretch", key="restore_backup_btn"):
-            if restore_payload_from_backup():
-                st.success("已還原最近備份。")
-                st.rerun()
-            st.error("找不到備份檔或還原失敗。")
-
-
 def main() -> None:
     st.set_page_config(page_title="0050/0056 投資追蹤", layout="wide")
     render_theme()
 
-    try_sync_local_json_to_sheet_once()
-
     if not require_authentication():
+        return
+
+    cfg = _get_google_sheet_config()
+    if not cfg.get("enabled"):
+        st.error("目前版本僅支援 Google Sheet 儲存，請在 Secrets 設定 GOOGLE_SHEETS_ENABLED = true。")
         return
 
     top_right = st.columns([8, 1])[1]
@@ -1637,6 +1577,12 @@ def main() -> None:
         st.rerun()
 
     transactions = load_transactions()
+    if st.session_state.get("data_backend") != "google_sheets":
+        sheet_error = str(st.session_state.get("sheet_error", "")).strip()
+        st.error("Google Sheet 連線失敗，請先修正設定後再使用。")
+        if sheet_error:
+            st.warning(f"Google Sheet 連線診斷：{sheet_error}")
+        return
 
     live_0050 = get_live_price(TW_SYMBOL_MAP["0050"])
     live_0056 = get_live_price(TW_SYMBOL_MAP["0056"])
@@ -1654,15 +1600,7 @@ def main() -> None:
     latest_updates = [t for t in latest_updates if t]
     if latest_updates:
         st.caption(f"股價上次成功更新：{max(latest_updates)}")
-    data_backend = st.session_state.get("data_backend", "local_json")
-    if data_backend == "google_sheets":
-        st.caption("資料來源：Google Sheet")
-    else:
-        st.caption("資料來源：本機 JSON（尚未啟用或連線失敗時自動使用）")
-        cfg = _get_google_sheet_config()
-        sheet_error = str(st.session_state.get("sheet_error", "")).strip()
-        if cfg.get("enabled") and sheet_error:
-            st.warning(f"Google Sheet 連線診斷：{sheet_error}")
+    st.caption("資料來源：Google Sheet")
 
     summary = compute_summary(transactions, prices)
     d50 = summary["details"]["0050"]
