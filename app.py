@@ -22,6 +22,8 @@ ALLOWED_SYMBOLS = tuple(TW_SYMBOL_MAP.keys())
 MAX_PRICE = 1_000_000.0
 MAX_SHARES = 10_000_000.0
 MAX_FEE_TAX = 10_000_000.0
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCK_MINUTES = 5
 
 
 @dataclass
@@ -152,6 +154,7 @@ def resolve_display_price(
     """回傳可展示價格與來源，避免即時價失敗時整頁中斷。"""
     if live_price is not None and live_price > 0:
         st.session_state[session_key] = float(live_price)
+        st.session_state[f"{session_key}_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return float(live_price), "live"
 
     cached = st.session_state.get(session_key)
@@ -287,14 +290,30 @@ def require_authentication() -> bool:
     if st.session_state.get("authenticated", False):
         return True
 
+    now_ts = datetime.now().timestamp()
+    lock_until = float(st.session_state.get("auth_lock_until", 0.0))
+    if now_ts < lock_until:
+        remain_sec = int(lock_until - now_ts)
+        st.error(f"登入嘗試過多，請 {max(1, remain_sec // 60)} 分鐘後再試。")
+        return False
+
     st.markdown("## 私人管理登入")
     input_password = st.text_input("請輸入密碼", type="password")
     if st.button("登入", type="primary", width="stretch"):
         if input_password == password:
             st.session_state["authenticated"] = True
+            st.session_state["auth_failed_count"] = 0
+            st.session_state["auth_lock_until"] = 0.0
             st.success("登入成功")
             st.rerun()
-        st.error("密碼錯誤")
+        failed = int(st.session_state.get("auth_failed_count", 0)) + 1
+        st.session_state["auth_failed_count"] = failed
+        if failed >= LOGIN_MAX_ATTEMPTS:
+            st.session_state["auth_lock_until"] = now_ts + LOGIN_LOCK_MINUTES * 60
+            st.session_state["auth_failed_count"] = 0
+            st.error(f"已連續錯誤 {LOGIN_MAX_ATTEMPTS} 次，暫時鎖定 {LOGIN_LOCK_MINUTES} 分鐘。")
+        else:
+            st.error(f"密碼錯誤（第 {failed}/{LOGIN_MAX_ATTEMPTS} 次）")
     return False
 
 
@@ -1027,6 +1046,38 @@ def summarize_strategy_brief(summary: Dict, prices: Dict[str, float]) -> Dict[st
     return {"rebalance_text": rebalance_text, "reminder_text": reminder_text}
 
 
+def build_monthly_action_lines(summary: Dict, prices: Dict[str, float]) -> List[str]:
+    total = summary["total_market_value"]
+    action_invest = "本月投入：薪水入帳後單次買入，維持 85/15（0050/0056）。"
+    action_add_on = "是否加碼：否，維持固定投入。"
+    action_rebalance = "是否再平衡：否，維持目前配置。"
+
+    high_6m = get_6m_high(TW_SYMBOL_MAP["0050"])
+    if high_6m and high_6m > 0:
+        drop_pct = (prices["0050"] - high_6m) / high_6m * 100
+        add_on = 0
+        if drop_pct <= -20:
+            add_on = 60000
+        elif drop_pct <= -15:
+            add_on = 40000
+        elif drop_pct <= -10:
+            add_on = 20000
+        if add_on > 0:
+            action_add_on = f"是否加碼：是，0050 加碼 {format_currency(add_on)}（本月最多一次）。"
+
+    if total > 0:
+        mv_0050 = summary["details"]["0050"]["market_value"]
+        mv_0056 = summary["details"]["0056"]["market_value"]
+        w50 = mv_0050 / total * 100
+        w56 = mv_0056 / total * 100
+        if w50 > 90 or w50 < 80 or w56 > 20 or w56 < 10:
+            action_rebalance = "是否再平衡：是，配置超出容忍區間，先用新投入校正。"
+    else:
+        action_rebalance = "是否再平衡：目前無持倉，先建立部位。"
+
+    return [action_invest, action_add_on, action_rebalance]
+
+
 def render_saving_goal_settings() -> None:
     saving_settings = load_saving_settings()
     with st.expander("設定存錢目標", expanded=False):
@@ -1137,6 +1188,19 @@ def render_strategy_signals(summary: Dict, prices: Dict[str, float]) -> None:
         <div style="background:{signal_bg};color:{signal_color};border-radius:12px;padding:0.8rem 0.9rem;margin-bottom:0.7rem;border:1px solid rgba(15,23,42,0.08);">
             <div style="font-weight:700;">{signal_title}</div>
             <div style="margin-top:0.2rem;">{signal_message}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    actions = build_monthly_action_lines(summary, prices)
+    st.markdown(
+        f"""
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:0.65rem 0.8rem;margin-bottom:0.35rem;">
+            <div style="font-weight:700;color:var(--text-primary);margin-bottom:0.25rem;">本月行動清單</div>
+            <div style="color:var(--text-primary);font-size:0.86rem;">1. {actions[0]}</div>
+            <div style="color:var(--text-primary);font-size:0.86rem;">2. {actions[1]}</div>
+            <div style="color:var(--text-primary);font-size:0.86rem;">3. {actions[2]}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1257,6 +1321,9 @@ def render_transaction_management(transactions: List[Dict]) -> None:
     selected_idx = sorted(set(selected_idx_desktop) | set(selected_idx_mobile))
 
     if selected_idx:
+        st.caption(f"已選 {len(selected_idx)} 筆")
+
+    if selected_idx:
         if st.button("🗑️ 刪除勾選", type="primary"):
             st.session_state["tx_delete_confirm"] = True
             st.session_state["tx_delete_targets"] = selected_idx
@@ -1264,6 +1331,16 @@ def render_transaction_management(transactions: List[Dict]) -> None:
     if st.session_state.get("tx_delete_confirm", False):
         targets = st.session_state.get("tx_delete_targets", [])
         st.warning(f"確認要刪除 {len(targets)} 筆交易嗎？此操作不可復原。")
+        preview_lines: List[str] = []
+        for idx in sorted(targets):
+            if 0 <= idx < len(transactions):
+                tx = transactions[idx]
+                tx_date = str(tx.get("timestamp", ""))[:10]
+                tx_symbol = tx.get("symbol", "-")
+                preview_lines.append(f"- {tx_date}｜{tx_symbol}")
+        if preview_lines:
+            st.markdown("將刪除以下交易：")
+            st.markdown("\n".join(preview_lines))
         c1, c2 = st.columns(2)
         if c1.button("確認刪除", type="primary", width="stretch"):
             deleted_count = 0
@@ -1314,6 +1391,14 @@ def main() -> None:
         st.warning("即時股價服務暫時受限，已改用快取或最近交易價顯示。")
 
     prices = {"0050": price_0050, "0056": price_0056}
+    latest_updates = [
+        st.session_state.get("last_price_0050_updated_at"),
+        st.session_state.get("last_price_0056_updated_at"),
+    ]
+    latest_updates = [t for t in latest_updates if t]
+    if latest_updates:
+        st.caption(f"股價上次成功更新：{max(latest_updates)}")
+
     summary = compute_summary(transactions, prices)
     d50 = summary["details"]["0050"]
     d56 = summary["details"]["0056"]
