@@ -270,7 +270,7 @@ def require_authentication() -> bool:
 
     st.markdown("## 私人管理登入")
     input_password = st.text_input("請輸入密碼", type="password")
-    if st.button("登入", type="primary", use_container_width=True):
+    if st.button("登入", type="primary", width="stretch"):
         if input_password == password:
             st.session_state["authenticated"] = True
             st.success("登入成功")
@@ -760,9 +760,9 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
                 ),
                 font=dict(color="#d8e0ea"),
             )
-            st.plotly_chart(fig_line, use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
+            st.plotly_chart(fig_line, width="stretch", config={"displayModeBar": False, "staticPlot": True})
         else:
-            st.plotly_chart(_empty_chart("尚無足夠交易資料"), use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
+            st.plotly_chart(_empty_chart("尚無足夠交易資料"), width="stretch", config={"displayModeBar": False, "staticPlot": True})
 
     alloc_df = pd.DataFrame(
         {
@@ -802,9 +802,9 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
                     )
                 ],
             )
-            st.plotly_chart(fig_hold, use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
+            st.plotly_chart(fig_hold, width="stretch", config={"displayModeBar": False, "staticPlot": True})
         else:
-            st.plotly_chart(_empty_chart("目前無持倉配置"), use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
+            st.plotly_chart(_empty_chart("目前無持倉配置"), width="stretch", config={"displayModeBar": False, "staticPlot": True})
 
     category_df = pd.DataFrame(
         {
@@ -843,9 +843,9 @@ def render_overview_dashboard(transactions: List[Dict], summary: Dict, prices: D
                     )
                 ],
             )
-            st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
+            st.plotly_chart(fig_cat, width="stretch", config={"displayModeBar": False, "staticPlot": True})
         else:
-            st.plotly_chart(_empty_chart("目前無類別資料"), use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
+            st.plotly_chart(_empty_chart("目前無類別資料"), width="stretch", config={"displayModeBar": False, "staticPlot": True})
 
     # 投資組合明細已整合至上方 0050/0056 卡片，避免重複資訊。
 
@@ -868,7 +868,7 @@ def render_add_transaction(transactions: List[Dict]) -> None:
     amount = shares * price
     st.caption(f"買賣金額（不含手續費/稅）：約 {amount:,.2f}")
 
-    submit = st.button("儲存交易", type="primary", use_container_width=True)
+    submit = st.button("儲存交易", type="primary", width="stretch")
 
     if submit:
         if price <= 0:
@@ -1036,7 +1036,7 @@ def render_saving_goal_settings() -> None:
             format="%.0f",
             key="saving_monthly_panel",
         )
-        if st.button("儲存存錢設定", use_container_width=True, key="save_saving_panel"):
+        if st.button("儲存存錢設定", width="stretch", key="save_saving_panel"):
             save_saving_settings(new_current, new_goal, new_monthly)
             st.success("已更新存錢目標")
             st.rerun()
@@ -1220,7 +1220,7 @@ def render_transaction_management(transactions: List[Dict]) -> None:
 
         edited_mobile_df = st.data_editor(
             mobile_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             key="tx_mobile_editor",
             column_config={
@@ -1246,7 +1246,7 @@ def render_transaction_management(transactions: List[Dict]) -> None:
         targets = st.session_state.get("tx_delete_targets", [])
         st.warning(f"確認要刪除 {len(targets)} 筆交易嗎？此操作不可復原。")
         c1, c2 = st.columns(2)
-        if c1.button("確認刪除", type="primary", use_container_width=True):
+        if c1.button("確認刪除", type="primary", width="stretch"):
             deleted_count = 0
             for idx in sorted(targets, reverse=True):
                 if 0 <= idx < len(transactions):
@@ -1258,14 +1258,14 @@ def render_transaction_management(transactions: List[Dict]) -> None:
             st.session_state["tx_reset_selection"] = True
             st.success(f"已刪除 {deleted_count} 筆交易")
             st.rerun()
-        if c2.button("取消", use_container_width=True):
+        if c2.button("取消", width="stretch"):
             st.session_state["tx_delete_confirm"] = False
             st.session_state["tx_delete_targets"] = []
             st.rerun()
 
     with st.expander("資料還原（備份）", expanded=False):
         st.caption("若誤刪或資料異常，可還原最近一次自動備份。")
-        if st.button("還原最近備份", use_container_width=True, key="restore_backup_btn"):
+        if st.button("還原最近備份", width="stretch", key="restore_backup_btn"):
             if restore_payload_from_backup():
                 st.success("已還原最近備份。")
                 st.rerun()
@@ -1280,7 +1280,7 @@ def main() -> None:
         return
 
     top_right = st.columns([8, 1])[1]
-    if top_right.button("登出", use_container_width=True):
+    if top_right.button("登出", width="stretch"):
         st.session_state["authenticated"] = False
         st.rerun()
 
