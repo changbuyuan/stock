@@ -65,6 +65,15 @@ def _set_sheet_error(message: str) -> None:
     st.session_state["sheet_error"] = message
 
 
+def normalize_symbol(raw_symbol: Any) -> str:
+    symbol = str(raw_symbol or "").strip()
+    if symbol.endswith(".0"):
+        symbol = symbol[:-2]
+    if symbol.isdigit() and len(symbol) <= 4:
+        symbol = symbol.zfill(4)
+    return symbol
+
+
 def _format_sheet_exception(exc: Exception, action: str) -> str:
     text = str(exc)
     if "Quota exceeded" in text:
@@ -121,11 +130,12 @@ def _load_payload_from_sheet() -> Dict | None:
         tx_rows = tx_ws.get_all_records()
         transactions: List[Dict] = []
         for row in tx_rows:
+            symbol = normalize_symbol(row.get("symbol", ""))
             transactions.append(
                 {
                     "timestamp": str(row.get("timestamp", "")),
-                    "symbol": str(row.get("symbol", "")),
-                    "side": str(row.get("side", "")),
+                    "symbol": symbol,
+                    "side": str(row.get("side", "")).lower(),
                     "price": float(row.get("price", 0) or 0),
                     "shares": float(row.get("shares", 0) or 0),
                     "amount": float(row.get("amount", 0) or 0),
@@ -349,10 +359,15 @@ def save_saving_settings(current_savings: float, savings_goal: float, monthly_sa
 def build_positions(transactions: List[Dict]) -> Dict[str, Position]:
     positions = {symbol: Position() for symbol in ALLOWED_SYMBOLS}
     for tx in transactions:
-        symbol = tx["symbol"]
-        side = tx["side"]
-        shares = float(tx["shares"])
-        total = float(tx["total"])
+        symbol = normalize_symbol(tx.get("symbol", ""))
+        side = str(tx.get("side", "")).lower()
+        if symbol not in positions or side not in ("buy", "sell"):
+            continue
+        try:
+            shares = float(tx.get("shares", 0.0))
+            total = float(tx.get("total", 0.0))
+        except (TypeError, ValueError):
+            continue
         pos = positions[symbol]
 
         if side == "buy":
@@ -373,8 +388,10 @@ def build_positions(transactions: List[Dict]) -> Dict[str, Position]:
 
 
 def get_last_transaction_price(transactions: List[Dict], symbol: str) -> float | None:
+    target_symbol = normalize_symbol(symbol)
     for tx in reversed(transactions):
-        if tx.get("symbol") != symbol:
+        tx_symbol = normalize_symbol(tx.get("symbol", ""))
+        if tx_symbol != target_symbol:
             continue
         try:
             price = float(tx.get("price", 0.0))
