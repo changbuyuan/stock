@@ -116,9 +116,24 @@ def _open_or_create_worksheet(spreadsheet, title: str, headers: List[str]):
     return ws
 
 
-def _load_payload_from_sheet() -> Dict | None:
+def _tx_to_row(tx: Dict) -> List[Any]:
+    return [
+        str(tx.get("timestamp", "")),
+        normalize_symbol(tx.get("symbol", "")),
+        str(tx.get("side", "")).lower(),
+        float(tx.get("price", 0) or 0),
+        float(tx.get("shares", 0) or 0),
+        float(tx.get("amount", 0) or 0),
+        float(tx.get("fee", 0) or 0),
+        float(tx.get("tax", 0) or 0),
+        float(tx.get("total", 0) or 0),
+    ]
+
+
+def _sheet_context():
     cfg = _get_google_sheet_config()
     if not cfg["enabled"]:
+        _set_sheet_error("請先啟用 GOOGLE_SHEETS_ENABLED = true。")
         return None
     if not cfg["spreadsheet_id"]:
         _set_sheet_error("未設定 GOOGLE_SHEETS_SPREADSHEET_ID。")
@@ -131,7 +146,20 @@ def _load_payload_from_sheet() -> Dict | None:
         spreadsheet = client.open_by_key(cfg["spreadsheet_id"])
         tx_ws = _open_or_create_worksheet(spreadsheet, cfg["tx_sheet"], GSHEET_TX_HEADERS)
         settings_ws = _open_or_create_worksheet(spreadsheet, cfg["settings_sheet"], GSHEET_SETTING_HEADERS)
+        st.session_state["sheet_error"] = ""
+        return tx_ws, settings_ws
+    except Exception as exc:
+        _set_sheet_error(_format_sheet_exception(exc, "連線"))
+        return None
 
+
+def _load_payload_from_sheet() -> Dict | None:
+    context = _sheet_context()
+    if not context:
+        st.session_state["data_backend"] = "google_sheets_error"
+        return None
+    tx_ws, settings_ws = context
+    try:
         tx_rows = tx_ws.get_all_records()
         transactions: List[Dict] = []
         for row in tx_rows:
@@ -174,36 +202,15 @@ def _load_payload_from_sheet() -> Dict | None:
 
 
 def _save_payload_to_sheet(payload: Dict) -> bool:
-    cfg = _get_google_sheet_config()
-    if not cfg["enabled"]:
+    context = _sheet_context()
+    if not context:
+        st.session_state["data_backend"] = "google_sheets_error"
         return False
-    if not cfg["spreadsheet_id"]:
-        _set_sheet_error("未設定 GOOGLE_SHEETS_SPREADSHEET_ID。")
-        return False
-    if not cfg["service_account_info"]:
-        _set_sheet_error("未設定或無法解析 GOOGLE_SERVICE_ACCOUNT_JSON。")
-        return False
+    tx_ws, settings_ws = context
     try:
-        client = _get_gspread_client(cfg["service_account_info"])
-        spreadsheet = client.open_by_key(cfg["spreadsheet_id"])
-        tx_ws = _open_or_create_worksheet(spreadsheet, cfg["tx_sheet"], GSHEET_TX_HEADERS)
-        settings_ws = _open_or_create_worksheet(spreadsheet, cfg["settings_sheet"], GSHEET_SETTING_HEADERS)
-
         tx_values = [GSHEET_TX_HEADERS]
         for tx in payload.get("transactions", []):
-            tx_values.append(
-                [
-                    str(tx.get("timestamp", "")),
-                    str(tx.get("symbol", "")),
-                    str(tx.get("side", "")),
-                    float(tx.get("price", 0) or 0),
-                    float(tx.get("shares", 0) or 0),
-                    float(tx.get("amount", 0) or 0),
-                    float(tx.get("fee", 0) or 0),
-                    float(tx.get("tax", 0) or 0),
-                    float(tx.get("total", 0) or 0),
-                ]
-            )
+            tx_values.append(_tx_to_row(tx))
         tx_ws.clear()
         tx_ws.update("A1", tx_values)
 
@@ -261,6 +268,50 @@ def save_payload(payload: Dict) -> bool:
     return False
 
 
+def append_transaction_to_sheet(tx: Dict) -> bool:
+    context = _sheet_context()
+    if not context:
+        st.session_state["data_backend"] = "google_sheets_error"
+        return False
+    tx_ws, _ = context
+    try:
+        tx_ws.append_row(_tx_to_row(tx), value_input_option="USER_ENTERED")
+        st.session_state["data_backend"] = "google_sheets"
+        st.session_state["sheet_error"] = ""
+        return True
+    except Exception as exc:
+        _set_sheet_error(_format_sheet_exception(exc, "寫入"))
+        st.session_state["data_backend"] = "google_sheets_error"
+        return False
+
+
+def save_saving_settings_to_sheet(settings: Dict[str, float]) -> bool:
+    context = _sheet_context()
+    if not context:
+        st.session_state["data_backend"] = "google_sheets_error"
+        return False
+    _, settings_ws = context
+    try:
+        settings_ws.update(
+            "A1",
+            [
+                GSHEET_SETTING_HEADERS,
+                [
+                    float(settings.get("current_savings", 0) or 0),
+                    float(settings.get("savings_goal", 500000) or 0),
+                    float(settings.get("monthly_saving", 10000) or 0),
+                ],
+            ],
+        )
+        st.session_state["data_backend"] = "google_sheets"
+        st.session_state["sheet_error"] = ""
+        return True
+    except Exception as exc:
+        _set_sheet_error(_format_sheet_exception(exc, "寫入"))
+        st.session_state["data_backend"] = "google_sheets_error"
+        return False
+
+
 def load_transactions() -> List[Dict]:
     payload = load_payload()
     transactions = payload.get("transactions", [])
@@ -270,8 +321,10 @@ def load_transactions() -> List[Dict]:
 def save_transactions(transactions: List[Dict]) -> None:
     payload = _get_cached_payload() or load_payload()
     payload["transactions"] = transactions
-    if not save_payload(payload):
+    # 刪除/重排等操作才進行整表覆寫；新增交易會走 append_transaction_to_sheet。
+    if not _save_payload_to_sheet(payload):
         st.error("Google Sheet 寫入失敗，交易未儲存，請稍後再試。")
+    _set_cached_payload(payload)
 
 
 def load_saving_settings() -> Dict[str, float]:
@@ -293,13 +346,15 @@ def load_saving_settings() -> Dict[str, float]:
 
 def save_saving_settings(current_savings: float, savings_goal: float, monthly_saving: float) -> None:
     payload = _get_cached_payload() or load_payload()
-    payload["saving_settings"] = {
+    new_settings = {
         "current_savings": float(current_savings),
         "savings_goal": float(savings_goal),
         "monthly_saving": float(monthly_saving),
     }
-    if not save_payload(payload):
+    payload["saving_settings"] = new_settings
+    if not save_saving_settings_to_sheet(new_settings):
         st.error("Google Sheet 寫入失敗，存錢設定未儲存，請稍後再試。")
+    _set_cached_payload(payload)
 
 
 def build_positions(transactions: List[Dict]) -> Dict[str, Position]:
@@ -1125,20 +1180,25 @@ def render_add_transaction(transactions: List[Dict]) -> None:
             st.error(f"手續費/交易稅過大，請小於 {MAX_FEE_TAX:,.0f}")
             return
         total = amount + fee + tax if side == "buy" else amount - fee - tax
-        transactions.append(
-            {
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-                "symbol": symbol,
-                "side": side,
-                "price": float(price),
-                "shares": float(shares),
-                "amount": float(amount),
-                "fee": float(fee),
-                "tax": float(tax),
-                "total": float(total),
-            }
-        )
-        save_transactions(transactions)
+        new_tx = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "symbol": symbol,
+            "side": side,
+            "price": float(price),
+            "shares": float(shares),
+            "amount": float(amount),
+            "fee": float(fee),
+            "tax": float(tax),
+            "total": float(total),
+        }
+        if append_transaction_to_sheet(new_tx):
+            transactions.append(new_tx)
+            payload = _get_cached_payload() or load_payload()
+            payload["transactions"] = transactions
+            _set_cached_payload(payload)
+        else:
+            st.error("Google Sheet 寫入失敗，交易未儲存。")
+            return
         st.success("交易已儲存")
         st.rerun()
 
