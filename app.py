@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -64,6 +65,27 @@ def _set_sheet_error(message: str) -> None:
     st.session_state["sheet_error"] = message
 
 
+def _format_sheet_exception(exc: Exception, action: str) -> str:
+    text = str(exc)
+    if "Quota exceeded" in text:
+        return (
+            f"Google Sheet {action}失敗：已達 API 讀寫配額，請稍等 1 分鐘後重試。"
+            "（已暫時改用本機 JSON）"
+        )
+    return f"Google Sheet {action}失敗：{type(exc).__name__}: {exc}"
+
+
+def _get_cached_payload() -> Dict | None:
+    payload = st.session_state.get("payload_cache")
+    if isinstance(payload, dict):
+        return deepcopy(payload)
+    return None
+
+
+def _set_cached_payload(payload: Dict) -> None:
+    st.session_state["payload_cache"] = deepcopy(payload if isinstance(payload, dict) else {})
+
+
 @st.cache_resource
 def _get_gspread_client(service_account_info: Dict[str, Any]):
     return gspread.service_account_from_dict(service_account_info)
@@ -75,11 +97,7 @@ def _open_or_create_worksheet(spreadsheet, title: str, headers: List[str]):
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=title, rows=2000, cols=max(12, len(headers) + 2))
         ws.update("A1", [headers])
-        return ws
-
-    row1 = ws.row_values(1)
-    if row1 != headers:
-        ws.clear()
+    if ws.row_count == 0:
         ws.update("A1", [headers])
     return ws
 
@@ -135,7 +153,7 @@ def _load_payload_from_sheet() -> Dict | None:
         st.session_state["sheet_error"] = ""
         return {"transactions": transactions, "saving_settings": settings}
     except Exception as exc:
-        _set_sheet_error(f"Google Sheet 讀取失敗：{type(exc).__name__}: {exc}")
+        _set_sheet_error(_format_sheet_exception(exc, "讀取"))
         st.session_state["data_backend"] = "local_json"
         return None
 
@@ -190,7 +208,7 @@ def _save_payload_to_sheet(payload: Dict) -> bool:
         st.session_state["sheet_error"] = ""
         return True
     except Exception as exc:
-        _set_sheet_error(f"Google Sheet 寫入失敗：{type(exc).__name__}: {exc}")
+        _set_sheet_error(_format_sheet_exception(exc, "寫入"))
         st.session_state["data_backend"] = "local_json"
         return False
 
@@ -207,23 +225,33 @@ class Position:
 
 
 def load_payload() -> Dict:
+    cached = _get_cached_payload()
+    if cached is not None:
+        return cached
+
     sheet_payload = _load_payload_from_sheet()
     if sheet_payload is not None:
+        _set_cached_payload(sheet_payload)
         return sheet_payload
 
     if not DATA_FILE.exists():
         st.session_state["data_backend"] = "local_json"
+        _set_cached_payload({})
         return {}
     try:
         payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         st.session_state["data_backend"] = "local_json"
+        _set_cached_payload({})
         return {}
     st.session_state["data_backend"] = "local_json"
-    return payload if isinstance(payload, dict) else {}
+    safe_payload = payload if isinstance(payload, dict) else {}
+    _set_cached_payload(safe_payload)
+    return safe_payload
 
 
 def save_payload(payload: Dict) -> None:
+    _set_cached_payload(payload)
     if _save_payload_to_sheet(payload):
         return
 
@@ -245,6 +273,7 @@ def restore_payload_from_backup() -> bool:
         return False
     try:
         DATA_FILE.write_text(BACKUP_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+        st.session_state.pop("payload_cache", None)
         return True
     except OSError:
         return False
@@ -285,7 +314,7 @@ def load_transactions() -> List[Dict]:
 
 
 def save_transactions(transactions: List[Dict]) -> None:
-    payload = load_payload()
+    payload = _get_cached_payload() or load_payload()
     payload["transactions"] = transactions
     save_payload(payload)
 
@@ -308,7 +337,7 @@ def load_saving_settings() -> Dict[str, float]:
 
 
 def save_saving_settings(current_savings: float, savings_goal: float, monthly_saving: float) -> None:
-    payload = load_payload()
+    payload = _get_cached_payload() or load_payload()
     payload["saving_settings"] = {
         "current_savings": float(current_savings),
         "savings_goal": float(savings_goal),
