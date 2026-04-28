@@ -5,8 +5,9 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
+import gspread
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -24,6 +25,154 @@ MAX_SHARES = 10_000_000.0
 MAX_FEE_TAX = 10_000_000.0
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_LOCK_MINUTES = 5
+GSHEET_TX_HEADERS = ["timestamp", "symbol", "side", "price", "shares", "amount", "fee", "tax", "total"]
+GSHEET_SETTING_HEADERS = ["current_savings", "savings_goal", "monthly_saving"]
+
+
+def _parse_bool_secret(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
+def _get_google_sheet_config() -> Dict[str, Any]:
+    enabled = _parse_bool_secret(st.secrets.get("GOOGLE_SHEETS_ENABLED", False))
+    spreadsheet_id = str(st.secrets.get("GOOGLE_SHEETS_SPREADSHEET_ID", "")).strip()
+    tx_sheet = str(st.secrets.get("GOOGLE_SHEETS_TX_SHEET", "transactions")).strip() or "transactions"
+    settings_sheet = str(st.secrets.get("GOOGLE_SHEETS_SETTINGS_SHEET", "saving_settings")).strip() or "saving_settings"
+    service_account_raw = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    service_account_info = None
+    if isinstance(service_account_raw, str):
+        try:
+            service_account_info = json.loads(service_account_raw)
+        except json.JSONDecodeError:
+            service_account_info = None
+    elif isinstance(service_account_raw, dict):
+        service_account_info = dict(service_account_raw)
+    return {
+        "enabled": enabled,
+        "spreadsheet_id": spreadsheet_id,
+        "tx_sheet": tx_sheet,
+        "settings_sheet": settings_sheet,
+        "service_account_info": service_account_info,
+    }
+
+
+@st.cache_resource
+def _get_gspread_client(service_account_info: Dict[str, Any]):
+    return gspread.service_account_from_dict(service_account_info)
+
+
+def _open_or_create_worksheet(spreadsheet, title: str, headers: List[str]):
+    try:
+        ws = spreadsheet.worksheet(title)
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=title, rows=2000, cols=max(12, len(headers) + 2))
+        ws.update("A1", [headers])
+        return ws
+
+    row1 = ws.row_values(1)
+    if row1 != headers:
+        ws.clear()
+        ws.update("A1", [headers])
+    return ws
+
+
+def _load_payload_from_sheet() -> Dict | None:
+    cfg = _get_google_sheet_config()
+    if not (cfg["enabled"] and cfg["spreadsheet_id"] and cfg["service_account_info"]):
+        return None
+    try:
+        client = _get_gspread_client(cfg["service_account_info"])
+        spreadsheet = client.open_by_key(cfg["spreadsheet_id"])
+        tx_ws = _open_or_create_worksheet(spreadsheet, cfg["tx_sheet"], GSHEET_TX_HEADERS)
+        settings_ws = _open_or_create_worksheet(spreadsheet, cfg["settings_sheet"], GSHEET_SETTING_HEADERS)
+
+        tx_rows = tx_ws.get_all_records()
+        transactions: List[Dict] = []
+        for row in tx_rows:
+            transactions.append(
+                {
+                    "timestamp": str(row.get("timestamp", "")),
+                    "symbol": str(row.get("symbol", "")),
+                    "side": str(row.get("side", "")),
+                    "price": float(row.get("price", 0) or 0),
+                    "shares": float(row.get("shares", 0) or 0),
+                    "amount": float(row.get("amount", 0) or 0),
+                    "fee": float(row.get("fee", 0) or 0),
+                    "tax": float(row.get("tax", 0) or 0),
+                    "total": float(row.get("total", 0) or 0),
+                }
+            )
+
+        setting_rows = settings_ws.get_all_records()
+        settings = {
+            "current_savings": 0.0,
+            "savings_goal": 500000.0,
+            "monthly_saving": 10000.0,
+        }
+        if setting_rows:
+            first = setting_rows[0]
+            settings = {
+                "current_savings": float(first.get("current_savings", settings["current_savings"]) or 0),
+                "savings_goal": float(first.get("savings_goal", settings["savings_goal"]) or 0),
+                "monthly_saving": float(first.get("monthly_saving", settings["monthly_saving"]) or 0),
+            }
+
+        st.session_state["data_backend"] = "google_sheets"
+        return {"transactions": transactions, "saving_settings": settings}
+    except Exception:
+        st.session_state["data_backend"] = "local_json"
+        return None
+
+
+def _save_payload_to_sheet(payload: Dict) -> bool:
+    cfg = _get_google_sheet_config()
+    if not (cfg["enabled"] and cfg["spreadsheet_id"] and cfg["service_account_info"]):
+        return False
+    try:
+        client = _get_gspread_client(cfg["service_account_info"])
+        spreadsheet = client.open_by_key(cfg["spreadsheet_id"])
+        tx_ws = _open_or_create_worksheet(spreadsheet, cfg["tx_sheet"], GSHEET_TX_HEADERS)
+        settings_ws = _open_or_create_worksheet(spreadsheet, cfg["settings_sheet"], GSHEET_SETTING_HEADERS)
+
+        tx_values = [GSHEET_TX_HEADERS]
+        for tx in payload.get("transactions", []):
+            tx_values.append(
+                [
+                    str(tx.get("timestamp", "")),
+                    str(tx.get("symbol", "")),
+                    str(tx.get("side", "")),
+                    float(tx.get("price", 0) or 0),
+                    float(tx.get("shares", 0) or 0),
+                    float(tx.get("amount", 0) or 0),
+                    float(tx.get("fee", 0) or 0),
+                    float(tx.get("tax", 0) or 0),
+                    float(tx.get("total", 0) or 0),
+                ]
+            )
+        tx_ws.clear()
+        tx_ws.update("A1", tx_values)
+
+        ss = payload.get("saving_settings", {})
+        settings_values = [
+            GSHEET_SETTING_HEADERS,
+            [
+                float(ss.get("current_savings", 0) or 0),
+                float(ss.get("savings_goal", 500000) or 0),
+                float(ss.get("monthly_saving", 10000) or 0),
+            ],
+        ]
+        settings_ws.clear()
+        settings_ws.update("A1", settings_values)
+
+        st.session_state["data_backend"] = "google_sheets"
+        return True
+    except Exception:
+        st.session_state["data_backend"] = "local_json"
+        return False
 
 
 @dataclass
@@ -38,16 +187,26 @@ class Position:
 
 
 def load_payload() -> Dict:
+    sheet_payload = _load_payload_from_sheet()
+    if sheet_payload is not None:
+        return sheet_payload
+
     if not DATA_FILE.exists():
+        st.session_state["data_backend"] = "local_json"
         return {}
     try:
         payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        st.session_state["data_backend"] = "local_json"
         return {}
+    st.session_state["data_backend"] = "local_json"
     return payload if isinstance(payload, dict) else {}
 
 
 def save_payload(payload: Dict) -> None:
+    if _save_payload_to_sheet(payload):
+        return
+
     if DATA_FILE.exists():
         try:
             BACKUP_FILE.write_text(DATA_FILE.read_text(encoding="utf-8"), encoding="utf-8")
@@ -58,6 +217,7 @@ def save_payload(payload: Dict) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    st.session_state["data_backend"] = "local_json"
 
 
 def restore_payload_from_backup() -> bool:
@@ -68,6 +228,34 @@ def restore_payload_from_backup() -> bool:
         return True
     except OSError:
         return False
+
+
+def try_sync_local_json_to_sheet_once() -> None:
+    if st.session_state.get("gsheet_sync_done", False):
+        return
+    st.session_state["gsheet_sync_done"] = True
+
+    cfg = _get_google_sheet_config()
+    if not (cfg["enabled"] and cfg["spreadsheet_id"] and cfg["service_account_info"]):
+        return
+    if not DATA_FILE.exists():
+        return
+
+    try:
+        local_payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(local_payload, dict):
+        return
+
+    sheet_payload = _load_payload_from_sheet()
+    if sheet_payload is None:
+        return
+
+    sheet_has_data = bool(sheet_payload.get("transactions")) or bool(sheet_payload.get("saving_settings"))
+    local_has_data = bool(local_payload.get("transactions")) or bool(local_payload.get("saving_settings"))
+    if local_has_data and not sheet_has_data:
+        _save_payload_to_sheet(local_payload)
 
 
 def load_transactions() -> List[Dict]:
@@ -1372,6 +1560,8 @@ def main() -> None:
     st.set_page_config(page_title="0050/0056 投資追蹤", layout="wide")
     render_theme()
 
+    try_sync_local_json_to_sheet_once()
+
     if not require_authentication():
         return
 
@@ -1398,6 +1588,11 @@ def main() -> None:
     latest_updates = [t for t in latest_updates if t]
     if latest_updates:
         st.caption(f"股價上次成功更新：{max(latest_updates)}")
+    data_backend = st.session_state.get("data_backend", "local_json")
+    if data_backend == "google_sheets":
+        st.caption("資料來源：Google Sheet")
+    else:
+        st.caption("資料來源：本機 JSON（尚未啟用或連線失敗時自動使用）")
 
     summary = compute_summary(transactions, prices)
     d50 = summary["details"]["0050"]
