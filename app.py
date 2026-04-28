@@ -902,7 +902,7 @@ def render_saving_goal_card() -> None:
         <div class="section-card">
             <div class="quote-title">存錢目標</div>
             <div class="saving-kpi">
-                {format_currency(current_savings)} / {format_currency(savings_goal)}
+                {current_savings:,.0f} / {savings_goal:,.0f}
             </div>
             <div class="saving-meta">
                 達成率：<b>{goal_ratio:.2f}%</b>
@@ -996,6 +996,7 @@ def render_saving_goal_settings() -> None:
             min_value=0.0,
             value=float(saving_settings["current_savings"]),
             step=1000.0,
+            format="%.0f",
             key="saving_current_panel",
         )
         new_goal = col_s2.number_input(
@@ -1003,6 +1004,7 @@ def render_saving_goal_settings() -> None:
             min_value=0.0,
             value=float(saving_settings["savings_goal"]),
             step=10000.0,
+            format="%.0f",
             key="saving_goal_panel",
         )
         new_monthly = st.number_input(
@@ -1010,6 +1012,7 @@ def render_saving_goal_settings() -> None:
             min_value=0.0,
             value=float(saving_settings["monthly_saving"]),
             step=1000.0,
+            format="%.0f",
             key="saving_monthly_panel",
         )
         if st.button("儲存存錢設定", use_container_width=True, key="save_saving_panel"):
@@ -1297,13 +1300,11 @@ def main() -> None:
         <div class="section-card">
             <div class="quote-title">0050 即時價</div>
             <div class="quote-value">{price_0050:.2f}</div>
-            <div class="quote-holding">
-                持有股數：<b>{hold_0050:,.4f}</b>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:0.45rem;">
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:0.45rem;">
                 <div><div class="quote-title">成本</div><div>{format_currency(d50["cost"])}</div></div>
                 <div><div class="quote-title">市值</div><div>{format_currency(d50["market_value"])}</div></div>
                 <div><div class="quote-title">未實現</div><div class="{pnl_50_class}">{format_currency(d50["unrealized_pnl"])}</div></div>
+                <div><div class="quote-title">持有股數</div><div>{hold_0050:,.0f}</div></div>
             </div>
         </div>
         """,
@@ -1314,13 +1315,11 @@ def main() -> None:
         <div class="section-card">
             <div class="quote-title">0056 即時價</div>
             <div class="quote-value">{price_0056:.2f}</div>
-            <div class="quote-holding">
-                持有股數：<b>{hold_0056:,.4f}</b>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:0.45rem;">
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:0.45rem;">
                 <div><div class="quote-title">成本</div><div>{format_currency(d56["cost"])}</div></div>
                 <div><div class="quote-title">市值</div><div>{format_currency(d56["market_value"])}</div></div>
                 <div><div class="quote-title">未實現</div><div class="{pnl_56_class}">{format_currency(d56["unrealized_pnl"])}</div></div>
+                <div><div class="quote-title">持有股數</div><div>{hold_0056:,.0f}</div></div>
             </div>
         </div>
         """,
