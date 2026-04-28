@@ -60,6 +60,10 @@ def _get_google_sheet_config() -> Dict[str, Any]:
     }
 
 
+def _set_sheet_error(message: str) -> None:
+    st.session_state["sheet_error"] = message
+
+
 @st.cache_resource
 def _get_gspread_client(service_account_info: Dict[str, Any]):
     return gspread.service_account_from_dict(service_account_info)
@@ -82,7 +86,13 @@ def _open_or_create_worksheet(spreadsheet, title: str, headers: List[str]):
 
 def _load_payload_from_sheet() -> Dict | None:
     cfg = _get_google_sheet_config()
-    if not (cfg["enabled"] and cfg["spreadsheet_id"] and cfg["service_account_info"]):
+    if not cfg["enabled"]:
+        return None
+    if not cfg["spreadsheet_id"]:
+        _set_sheet_error("未設定 GOOGLE_SHEETS_SPREADSHEET_ID。")
+        return None
+    if not cfg["service_account_info"]:
+        _set_sheet_error("未設定或無法解析 GOOGLE_SERVICE_ACCOUNT_JSON。")
         return None
     try:
         client = _get_gspread_client(cfg["service_account_info"])
@@ -122,15 +132,23 @@ def _load_payload_from_sheet() -> Dict | None:
             }
 
         st.session_state["data_backend"] = "google_sheets"
+        st.session_state["sheet_error"] = ""
         return {"transactions": transactions, "saving_settings": settings}
-    except Exception:
+    except Exception as exc:
+        _set_sheet_error(f"Google Sheet 讀取失敗：{type(exc).__name__}: {exc}")
         st.session_state["data_backend"] = "local_json"
         return None
 
 
 def _save_payload_to_sheet(payload: Dict) -> bool:
     cfg = _get_google_sheet_config()
-    if not (cfg["enabled"] and cfg["spreadsheet_id"] and cfg["service_account_info"]):
+    if not cfg["enabled"]:
+        return False
+    if not cfg["spreadsheet_id"]:
+        _set_sheet_error("未設定 GOOGLE_SHEETS_SPREADSHEET_ID。")
+        return False
+    if not cfg["service_account_info"]:
+        _set_sheet_error("未設定或無法解析 GOOGLE_SERVICE_ACCOUNT_JSON。")
         return False
     try:
         client = _get_gspread_client(cfg["service_account_info"])
@@ -169,8 +187,10 @@ def _save_payload_to_sheet(payload: Dict) -> bool:
         settings_ws.update("A1", settings_values)
 
         st.session_state["data_backend"] = "google_sheets"
+        st.session_state["sheet_error"] = ""
         return True
-    except Exception:
+    except Exception as exc:
+        _set_sheet_error(f"Google Sheet 寫入失敗：{type(exc).__name__}: {exc}")
         st.session_state["data_backend"] = "local_json"
         return False
 
@@ -1593,6 +1613,10 @@ def main() -> None:
         st.caption("資料來源：Google Sheet")
     else:
         st.caption("資料來源：本機 JSON（尚未啟用或連線失敗時自動使用）")
+        cfg = _get_google_sheet_config()
+        sheet_error = str(st.session_state.get("sheet_error", "")).strip()
+        if cfg.get("enabled") and sheet_error:
+            st.warning(f"Google Sheet 連線診斷：{sheet_error}")
 
     summary = compute_summary(transactions, prices)
     d50 = summary["details"]["0050"]
