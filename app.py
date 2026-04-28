@@ -641,8 +641,10 @@ def require_authentication() -> bool:
         return False
 
     st.markdown("## 私人管理登入")
-    input_password = st.text_input("請輸入密碼", type="password")
-    if st.button("登入", type="primary", width="stretch"):
+    with st.form("login_form", clear_on_submit=False):
+        input_password = st.text_input("請輸入密碼", type="password")
+        submitted = st.form_submit_button("登入", type="primary", width="stretch")
+    if submitted:
         if input_password == password:
             st.session_state["authenticated"] = True
             st.session_state["auth_failed_count"] = 0
